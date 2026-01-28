@@ -1,233 +1,301 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="UTF-8">
-<title>Avoid the Center</title>
-
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Avoid Center – Hard Mode with Music</title>
 
 <style>
 html, body {
   margin: 0;
+  padding: 0;
   overflow: hidden;
   background: linear-gradient(#e0f7fa, #ffe0b2);
   font-family: Arial, sans-serif;
 }
-canvas { display:block; }
+
+canvas { display: block; }
 
 #ui {
   position: fixed;
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 16px;
-  font-weight: bold;
-  background: rgba(255,255,255,0.85);
-  padding: 6px 12px;
-  border-radius: 8px;
+  font-size: 18px;
 }
 
-#msg {
+.overlay {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 32px;
-  font-weight: bold;
-  opacity: 0;
-  transition: opacity 0.3s;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  text-align: center;
+  flex-direction: column;
+}
+
+button {
+  margin-top: 15px;
+  padding: 10px 20px;
+  font-size: 18px;
 }
 </style>
 </head>
 
 <body>
 
-<div id="ui">Level: 1 | Score: 0 | Coins: 0</div>
-<div id="msg"></div>
+<div id="startScreen" class="overlay">
+  TAP / CLICK TO START
+</div>
+
+<div id="levelScreen" class="overlay" style="display:none;">
+  <div id="levelText"></div>
+  <button id="nextBtn">NEXT LEVEL</button>
+</div>
+
+<div id="gameOverScreen" class="overlay" style="display:none;">
+  <div id="gameOverText"></div>
+  <button onclick="location.reload()">RESTART</button>
+</div>
+
+<div id="ui">Level: 1 | Remaining: 0 | Score: 0</div>
 <canvas id="game"></canvas>
 
 <script>
-/* ========= SETUP ========= */
+/* ================= SETUP ================= */
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const ui = document.getElementById("ui");
-const msg = document.getElementById("msg");
 
-let width, height;
+const startScreen = document.getElementById("startScreen");
+const levelScreen = document.getElementById("levelScreen");
+const gameOverScreen = document.getElementById("gameOverScreen");
+const levelText = document.getElementById("levelText");
+const gameOverText = document.getElementById("gameOverText");
+const nextBtn = document.getElementById("nextBtn");
+
 function resize() {
-  const dpr = devicePixelRatio || 1;
-  width = innerWidth;
-  height = innerHeight;
-  canvas.style.width = width + "px";
-  canvas.style.height = height + "px";
-  canvas.width = width * dpr;
-  canvas.height = height * dpr;
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 }
 resize();
-addEventListener("resize", resize);
+window.addEventListener("resize", resize);
 
-/* ========= CENTER ========= */
-const center = {
-  x: () => width / 2,
-  y: () => height / 2,
-  r: 28
-};
+/* ================= AUDIO ================= */
+let audioCtx;
+let musicOsc;
+let musicGain;
 
-/* ========= GAME STATE ========= */
-let level = 1;
-let score = 0;
-let coins = 0;
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-let currentShape = null;
-let gameOver = false;
-let lastTime = 0;
+  // Background music (soft)
+  musicOsc = audioCtx.createOscillator();
+  musicGain = audioCtx.createGain();
 
-/* HELP SYSTEM */
-let failCount = 0;
-let shield = false;
+  musicOsc.type = "sine";
+  musicOsc.frequency.value = 120;   // calm background tone
+  musicGain.gain.value = 0.05;      // low volume
 
-/* ========= INPUT ========= */
-canvas.addEventListener("mousemove", e => {
-  if (currentShape) currentShape.x = e.clientX;
-});
-canvas.addEventListener("touchmove", e => {
-  e.preventDefault();
-  if (currentShape) currentShape.x = e.touches[0].clientX;
-},{passive:false});
-
-/* ========= SPEED ========= */
-function speedByLevel() {
-  if (level <= 3) return 2.5;
-  if (level <= 7) return 3.6;
-  return 4.5 + level * 0.25;
+  musicOsc.connect(musicGain);
+  musicGain.connect(audioCtx.destination);
+  musicOsc.start();
 }
 
-/* ========= CREATE SHAPE ========= */
-function createShape() {
-  const types = ["ring","bar","cross","triangle"];
+function playGameOverSound() {
+  const o = audioCtx.createOscillator();
+  o.type = "square";
+  o.frequency.value = 200;
+  o.connect(audioCtx.destination);
+  o.start();
+  setTimeout(() => o.stop(), 400);
+}
+
+/* ================= CENTER ================= */
+const center = {
+  x: () => canvas.width / 2,
+  y: () => canvas.height / 2,
+  r: 26
+};
+
+/* ================= LEVEL DATA ================= */
+const levels = [
+  { count: 5 },
+  { count: 8 },
+  { count: 12 },
+  { count: 16 },
+  { count: 20 },
+  { count: 25 }
+];
+
+function getDifficulty(level) {
   return {
-    type: types[Math.floor(Math.random()*types.length)],
-    x: center.x(),
-    y: -120,
-    size: 70,
-    speed: speedByLevel(),
-    angle: Math.random()*Math.PI
+    speed: 1.5 + level * 0.6,
+    gapSize: Math.max(0.45, 1.6 - level * 0.18),
+    shapeSize: Math.max(45, 70 - level * 3)
   };
 }
 
-/* ========= COLLISION ========= */
-function hit(shape) {
-  const dx = shape.x - center.x();
-  const dy = shape.y - center.y();
-  return Math.sqrt(dx*dx + dy*dy) < shape.size - center.r;
+/* ================= GAME STATE ================= */
+let level = 0;
+let remaining = 0;
+let score = 0;
+let currentShape = null;
+let gameOver = false;
+
+/* ================= INPUT ================= */
+document.addEventListener("mousemove", e => {
+  if (currentShape) currentShape.x = e.clientX;
+});
+
+document.addEventListener("touchmove", e => {
+  e.preventDefault();
+  if (currentShape) currentShape.x = e.touches[0].clientX;
+}, { passive: false });
+
+/* ================= SHAPE ================= */
+function createShape() {
+  const types = ["ring", "bar", "cross", "triangle", "arc"];
+  const type = types[Math.floor(Math.random() * types.length)];
+  const diff = getDifficulty(level + 1);
+
+  return {
+    type,
+    x: center.x(),
+    y: -80,
+    size: diff.shapeSize,
+    speed: diff.speed,
+    angle: Math.random() * Math.PI,
+    gapStart: Math.random() * Math.PI * 2,
+    gapSize: diff.gapSize
+  };
 }
 
-/* ========= DRAW ========= */
+/* ================= COLLISION ================= */
+function hit(s) {
+  const dx = s.x - center.x();
+  const dy = s.y - center.y();
+  return Math.sqrt(dx * dx + dy * dy) < s.size - center.r;
+}
+
+/* ================= DRAW SHAPE ================= */
 function drawShape(s) {
   ctx.save();
-  ctx.translate(s.x,s.y);
+  ctx.translate(s.x, s.y);
   ctx.rotate(s.angle);
-  ctx.lineWidth = 10;
   ctx.strokeStyle = "#333";
+  ctx.lineWidth = 10;
   ctx.beginPath();
 
-  if (s.type==="ring") ctx.arc(0,0,s.size,0,Math.PI*1.4);
-  if (s.type==="bar"){ ctx.moveTo(-60,0); ctx.lineTo(60,0); }
-  if (s.type==="cross"){
-    ctx.moveTo(-60,0); ctx.lineTo(60,0);
-    ctx.moveTo(0,-60); ctx.lineTo(0,60);
-  }
-  if (s.type==="triangle"){
-    ctx.moveTo(0,-60);
-    ctx.lineTo(-60,60);
-    ctx.lineTo(60,60);
-    ctx.closePath();
+  switch (s.type) {
+    case "ring":
+      ctx.arc(0, 0, s.size, s.gapStart, s.gapStart + s.gapSize);
+      break;
+    case "bar":
+      ctx.moveTo(-s.size, 0);
+      ctx.lineTo(s.size, 0);
+      break;
+    case "cross":
+      ctx.moveTo(-s.size, 0);
+      ctx.lineTo(s.size, 0);
+      ctx.moveTo(0, -s.size);
+      ctx.lineTo(0, s.size);
+      break;
+    case "triangle":
+      ctx.moveTo(0, -s.size);
+      ctx.lineTo(-s.size, s.size);
+      ctx.lineTo(s.size, s.size);
+      ctx.closePath();
+      break;
+    case "arc":
+      ctx.arc(0, 0, s.size, Math.PI * 0.4, Math.PI * 1.1);
+      break;
   }
 
   ctx.stroke();
   ctx.restore();
 }
 
-/* ========= MESSAGE ========= */
-function show(text) {
-  msg.innerText = text;
-  msg.style.opacity = 1;
-  setTimeout(()=>msg.style.opacity=0, 900);
-}
+/* ================= GAME LOOP ================= */
+function loop() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-/* ========= RESET SHAPE SAFELY ========= */
-function resetShape() {
-  currentShape = null;
-  gameOver = false;
-}
-
-/* ========= GAME LOOP ========= */
-function loop(time) {
-  const delta = (time - lastTime) / 16.6;
-  lastTime = time;
-
-  ctx.clearRect(0,0,width,height);
-
-  /* Center */
   ctx.beginPath();
-  ctx.arc(center.x(),center.y(),center.r,0,Math.PI*2);
-  ctx.strokeStyle = shield ? "#44bd32" : "#fff";
+  ctx.arc(center.x(), center.y(), center.r, 0, Math.PI * 2);
+  ctx.strokeStyle = "#fff";
   ctx.lineWidth = 4;
   ctx.stroke();
 
-  /* ALWAYS ENSURE SHAPE EXISTS */
-  if (!currentShape && !gameOver) {
+  if (!currentShape && remaining > 0) {
     currentShape = createShape();
+    remaining--;
   }
 
-  if (currentShape && !gameOver) {
-    currentShape.y += currentShape.speed * delta;
-    currentShape.angle += 0.02;
+  if (currentShape) {
+    currentShape.y += currentShape.speed;
+    currentShape.angle += 0.01;
     drawShape(currentShape);
 
     if (hit(currentShape)) {
-      if (shield) {
-        shield = false;
-        resetShape();
-      } else {
-        gameOver = true;
-        failCount++;
-        show("GAME OVER");
-
-        setTimeout(() => {
-          resetShape();
-
-          if (failCount >= 2) {
-            shield = true;
-            show("SHIELD ACTIVATED");
-            failCount = 0;
-          }
-        }, 1000);
-      }
+      gameOver = true;
+      playGameOverSound();
     }
 
-    if (currentShape && currentShape.y > height + 120) {
-      resetShape();
+    if (currentShape.y > canvas.height + 120) {
       score += 10;
-
-      if (score % 100 === 0) {
-        level++;
-        show("AWESOME!");
-
-        if (level % 10 === 0) {
-          coins += 10;
-          show("+10 COINS");
-        }
-      }
+      currentShape = null;
     }
   }
 
-  ui.innerText = `Level: ${level} | Score: ${score} | Coins: ${coins}`;
-  requestAnimationFrame(loop);
+  ui.textContent =
+    `Level: ${level + 1} | Remaining: ${remaining} | Score: ${score}`;
+
+  if (!gameOver) {
+    if (remaining === 0 && !currentShape) {
+      const bonus = (level + 1) * 50;
+      score += bonus;
+      levelText.innerHTML =
+        `LEVEL ${level + 1} COMPLETE 🎉<br>
+         Bonus: +${bonus}<br>
+         Score: ${score}`;
+      levelScreen.style.display = "flex";
+      return;
+    }
+    requestAnimationFrame(loop);
+  } else {
+    gameOverText.innerHTML =
+      `GAME OVER ❌<br>
+       Final Score: ${score}<br>
+       Level Reached: ${level + 1}`;
+    gameOverScreen.style.display = "flex";
+  }
 }
 
-loop();
+/* ================= FLOW ================= */
+function startLevel() {
+  currentShape = null;
+  remaining = levels[level].count;
+  levelScreen.style.display = "none";
+  gameOverScreen.style.display = "none";
+  loop();
+}
+
+startScreen.onclick = () => {
+  initAudio();          // 🔊 music starts here
+  startScreen.style.display = "none";
+  startLevel();
+};
+
+nextBtn.onclick = () => {
+  level++;
+  if (level >= levels.length) {
+    alert(`🎉 YOU COMPLETED ALL LEVELS!\nFINAL SCORE: ${score}`);
+    location.reload();
+  }
+  startLevel();
+};
 </script>
 
 </body>
